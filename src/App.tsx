@@ -1,7 +1,10 @@
 // src/App.tsx
 import React, { useState } from "react";
 
-// --- GeoNet recent quakes (MMI >= 3) -------------------------
+/* =========================
+   Types for live data
+   ========================= */
+// GeoNet recent quakes (MMI >= 3)
 type QuakeFeature = {
   type: "Feature";
   geometry: { type: "Point"; coordinates: [number, number] };
@@ -17,11 +20,63 @@ type QuakeFeature = {
 };
 type QuakeFC = { type: "FeatureCollection"; features: QuakeFeature[] };
 
-export default function App() {
-  // page view + demo state
-  const [view, setView] = useState<"dashboard" | "architecture">("dashboard");
+// NZTA / Waka Kotahi Road Events (GeoJSON Feature)
+type RoadEventFeature = {
+  type: "Feature";
+  properties: {
+    OBJECTID: number;
+    EVENTTYPE?: string;
+    STATUS?: string;
+    SEVERITY?: string;
+    ROUTE?: string;
+    LOCATION?: string;
+    DESCRIPTION?: string;
+    LASTUPDATED?: number;
+  };
+};
 
-  // quake state
+/* =========================
+   Constants (APIs)
+   ========================= */
+const GEONET_RECENT = "https://api.geonet.org.nz/quake?MMI=3";
+const NZTA_ROAD_EVENTS =
+  "https://services.arcgis.com/CXBb7LAjgIIdcsPt/arcgis/rest/services/NZTA_Highway_Information/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson";
+
+/* =========================
+   Components
+   ========================= */
+function ArchitectureDiagram() {
+  return (
+    <main className="max-w-7xl mx-auto p-4">
+      <h2 className="text-xl font-bold mb-2">One-Page Architecture Diagram</h2>
+      <p className="text-sm text-gray-600">
+        Data sources → adapters → aggregator API → cache/WebSocket → React UI
+      </p>
+      <div className="mt-4 p-4 rounded-xl border bg-white">
+        <p className="text-sm text-gray-600">
+          (Your SVG diagram can be inserted here; omitted for brevity.)
+        </p>
+      </div>
+    </main>
+  );
+}
+
+export default function App() {
+  /* --------- UI state --------- */
+  const [view, setView] = useState<"dashboard" | "architecture">("dashboard");
+  const [radius, setRadius] = useState(10);
+  const [layers, setLayers] = useState({
+    quakes: true,
+    traffic: true,
+    rain: true,
+    flood: false,
+    landslide: false,
+    community: true,
+  });
+  const toggle = (k: keyof typeof layers) =>
+    setLayers((s) => ({ ...s, [k]: !s[k] }));
+
+  /* --------- GeoNet quakes --------- */
   const [quakes, setQuakes] = useState<QuakeFeature[]>([]);
   const [loadingQuakes, setLoadingQuakes] = useState(false);
   const [errorQuakes, setErrorQuakes] = useState<string | null>(null);
@@ -30,7 +85,7 @@ export default function App() {
     try {
       setLoadingQuakes(true);
       setErrorQuakes(null);
-      const res = await fetch("https://api.geonet.org.nz/quake?MMI=3", {
+      const res = await fetch(GEONET_RECENT, {
         headers: { Accept: "application/vnd.geo+json;version=2" },
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -48,72 +103,26 @@ export default function App() {
     }
   }
 
+  /* --------- NZTA road events --------- */
+  const [roadEvents, setRoadEvents] = useState<RoadEventFeature[]>([]);
+  const [loadingRoad, setLoadingRoad] = useState(false);
+  const [errorRoad, setErrorRoad] = useState<string | null>(null);
 
-
-//-----NZTA
-
-  // --- NZTA / Waka Kotahi Road Events (ArcGIS FeatureService layer 0) ---
-type RoadEvent = {
-  attributes: {
-    OBJECTID: number;
-    EVENTNAME?: string;
-    EVENTTYPE?: string;     // e.g., Closure, Roadworks, Warning
-    STATUS?: string;        // e.g., Open, Planned, Closed
-    STARTDATE?: number;     // epoch ms
-    ENDDATE?: number;       // epoch ms
-    DIRECTION?: string;
-    SEVERITY?: string;
-    LOCATION?: string;      // locality text
-    ROUTE?: string;         // e.g., SH1
-    LASTUPDATED?: number;   // epoch ms
-    DESCRIPTION?: string;
-  };
-  geometry?: { x: number; y: number }; // WebMercator or WGS84 depending on service
-};
-
-const [roadEvents, setRoadEvents] = useState<RoadEvent[]>([]);
-const [loadingRoad, setLoadingRoad] = useState(false);
-const [errorRoad, setErrorRoad] = useState<string | null>(null);
-
-// TODO: replace with the actual FeatureServer layer 0 URL you copied
-const NZTA_LAYER0 = "PASTE_FEATURESERVER_LAYER0_URL_HERE";
-
-async function loadRoadEvents() {
-  if (!NZTA_LAYER0 || NZTA_LAYER0.includes("PASTE")) {
-    setErrorRoad("Set NZTA_LAYER0 to the FeatureServer layer 0 URL.");
-    return;
+  async function loadRoadEvents() {
+    try {
+      setLoadingRoad(true);
+      setErrorRoad(null);
+      const res = await fetch(NZTA_ROAD_EVENTS);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setRoadEvents((data.features || []) as RoadEventFeature[]);
+    } catch (e: any) {
+      setErrorRoad(e.message || "Failed to load road events");
+    } finally {
+      setLoadingRoad(false);
+    }
   }
-  try {
-    setLoadingRoad(true);
-    setErrorRoad(null);
 
-    // Standard ArcGIS query: all open/active events, last updated first
-    const params = new URLSearchParams({
-      where: "1=1",
-      outFields: "*",
-      orderByFields: "LASTUPDATED DESC",
-      f: "json",
-      // Return WGS84 coords so we can map later
-      outSR: "4326",
-    });
-
-    const res = await fetch(`${NZTA_LAYER0}/query?${params.toString()}`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data = await res.json();
-    setRoadEvents((data.features || []) as RoadEvent[]);
-  } catch (e: any) {
-    setErrorRoad(e.message || "Failed to load road events");
-  } finally {
-    setLoadingRoad(false);
-  }
-}
-
-//---------
-
-
-
-
-  
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar */}
@@ -143,40 +152,134 @@ async function loadRoadEvents() {
               Architecture
             </button>
           </nav>
+          <div className="ml-auto flex items-center gap-2 w-full sm:w-[520px]">
+            <input
+              className="w-full rounded-xl border px-3 py-2 text-sm"
+              placeholder="Search address e.g. 123 Queen St, Lower Hutt"
+            />
+            <button className="rounded-xl bg-black text-white px-4 py-2 text-sm">
+              Locate
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Main */}
       {view === "architecture" ? (
-        <main className="max-w-7xl mx-auto p-4">
-          <h2 className="text-xl font-bold mb-2">One-Page Architecture Diagram</h2>
-          <p className="text-sm text-gray-600">
-            (Keep your SVG diagram version here. This is a placeholder.)
-          </p>
-        </main>
+        <ArchitectureDiagram />
       ) : (
         <main className="max-w-7xl mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
-          {/* Left column placeholder */}
-          <section className="lg:col-span-8">
-            <div className="bg-white rounded-2xl shadow-sm border p-6 h-[420px] grid place-items-center text-gray-500">
-              <div className="text-center">
-                <div className="text-5xl">🗺️</div>
-                <div className="mt-2 text-sm">(Map placeholder)</div>
+          {/* Left column: Map + toggles + community form */}
+          <section className="lg:col-span-8 flex flex-col gap-4">
+            {/* Map card */}
+            <div className="bg-white rounded-2xl shadow-sm border">
+              <div className="p-3 flex items-center justify-between">
+                <div className="font-semibold">Map</div>
+                <div className="flex items-center gap-2">
+                  <label className="text-sm text-gray-600">Radius</label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={50}
+                    value={radius}
+                    onChange={(e) => setRadius(parseInt(e.target.value))}
+                  />
+                  <span className="text-sm w-10 text-right">{radius} km</span>
+                  <button className="rounded-lg border px-3 py-1 text-sm">
+                    Draw Area
+                  </button>
+                </div>
+              </div>
+              <div className="h-[420px] bg-gradient-to-br from-gray-100 to-gray-200 rounded-b-2xl grid place-items-center text-gray-500">
+                <div className="text-center">
+                  <div className="text-5xl">🗺️</div>
+                  <div className="mt-2 text-sm">(Map placeholder for Leaflet/MapLibre)</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Layer toggles */}
+            <div className="bg-white rounded-2xl shadow-sm border p-4">
+              <div className="font-semibold mb-2">Layers</div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {([
+                  ["quakes", "Earthquakes (MMI)"] as const,
+                  ["traffic", "Traffic / Road Events"] as const,
+                  ["rain", "Rain (6–24h)"] as const,
+                  ["flood", "Flood / Coastal risk"] as const,
+                  ["landslide", "Landslides"] as const,
+                  ["community", "Community Reports"] as const,
+                ] as const).map(([k, label]) => (
+                  <button
+                    key={k}
+                    onClick={() => toggle(k)}
+                    className={`justify-between flex items-center rounded-xl border px-3 py-2 text-sm ${
+                      layers[k as keyof typeof layers]
+                        ? "bg-black text-white"
+                        : "bg-white"
+                    }`}
+                  >
+                    <span>{label}</span>
+                    <span className="text-xs opacity-70">
+                      {layers[k as keyof typeof layers] ? "on" : "off"}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Community report form (demo) */}
+            <div className="bg-white rounded-2xl shadow-sm border p-4">
+              <div className="font-semibold mb-3">Report an Issue (Community)</div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <select className="rounded-xl border px-3 py-2 text-sm">
+                  <option>Flooding</option>
+                  <option>Tree fall</option>
+                  <option>Road blockage</option>
+                  <option>Power outage</option>
+                  <option>Other</option>
+                </select>
+                <input
+                  className="rounded-xl border px-3 py-2 text-sm"
+                  placeholder="Nearest address / landmark"
+                />
+                <textarea
+                  className="rounded-xl border px-3 py-2 text-sm sm:col-span-2"
+                  placeholder="Describe what you see (e.g., water across road, depth, time)"
+                />
+                <div className="flex items-center justify-between sm:col-span-2">
+                  <div className="text-xs text-gray-500">
+                    Location will use current map center unless you draw a point.
+                  </div>
+                  <button className="rounded-xl bg-black text-white px-4 py-2 text-sm">
+                    Submit report
+                  </button>
+                </div>
               </div>
             </div>
           </section>
 
-          {/* Right column: Live feed + Quakes */}
+          {/* Right column: Live feed + live data cards + summary */}
           <aside className="lg:col-span-4 flex flex-col gap-4">
-            {/* Live Feed demo card */}
+            {/* Live Feed (demo) */}
             <div className="bg-white rounded-2xl shadow-sm border p-4">
-              <div className="font-semibold mb-2">Live Feed (demo)</div>
+              <div className="font-semibold mb-2">Live Feed</div>
               <ul className="divide-y">
                 {[
                   {
                     time: "2 min ago",
                     title: "Road closure – SH2 slip near Kaitoke",
                     detail: "Detour via Plateau Rd. Expect delays.",
+                  },
+                  {
+                    time: "12 min ago",
+                    title: "Quake M3.9 – 15 km NE of Wellington",
+                    detail: "MMI 3 (weak) reported in Lower Hutt.",
+                  },
+                  {
+                    time: "25 min ago",
+                    title: "Heavy rain band moving east",
+                    detail: "Last 6h: 18 mm in Hutt Valley stations.",
                   },
                 ].map((it, i) => (
                   <li key={i} className="py-3">
@@ -236,71 +339,96 @@ async function loadRoadEvents() {
                 ))}
               </ul>
             </div>
+
+            {/* Road Events (live from Waka Kotahi) */}
+            <div className="bg-white rounded-2xl shadow-sm border p-4">
+              <div className="flex items-center justify-between mb-2">
+                <div className="font-semibold">Road Events (NZTA)</div>
+                <button
+                  onClick={loadRoadEvents}
+                  className="rounded-lg border px-3 py-1 text-sm"
+                  disabled={loadingRoad}
+                >
+                  {loadingRoad ? "Loading…" : "Refresh"}
+                </button>
+              </div>
+
+              {errorRoad && (
+                <div className="text-sm text-red-600">Error: {errorRoad}</div>
+              )}
+              {!loadingRoad && roadEvents.length === 0 && !errorRoad && (
+                <div className="text-sm text-gray-500">
+                  No data loaded yet — click Refresh.
+                </div>
+              )}
+
+              <ul className="divide-y">
+                {roadEvents.slice(0, 20).map((ev) => {
+                  const p = ev.properties || {};
+                  const when = p.LASTUPDATED
+                    ? new Date(p.LASTUPDATED).toLocaleString()
+                    : "";
+                  return (
+                    <li key={p.OBJECTID} className="py-3">
+                      <div className="text-sm font-medium">
+                        {p.EVENTTYPE || "Event"} {p.ROUTE ? `• ${p.ROUTE}` : ""}{" "}
+                        {p.LOCATION ? `• ${p.LOCATION}` : ""}
+                      </div>
+                      <div className="text-xs text-gray-500">
+                        {p.STATUS || "Status unknown"}{" "}
+                        {p.SEVERITY ? `• ${p.SEVERITY}` : ""}{" "}
+                        {when ? `• ${when}` : ""}
+                      </div>
+                      {p.DESCRIPTION && (
+                        <div className="text-sm text-gray-600 mt-1">
+                          {p.DESCRIPTION}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+
+            {/* Area summary (demo) */}
+            <div className="bg-white rounded-2xl shadow-sm border p-4">
+              <div className="font-semibold mb-2">Area Summary</div>
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Past 24h Rain</div>
+                  <div className="text-2xl font-semibold">24 mm</div>
+                </div>
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Active Road Events</div>
+                  <div className="text-2xl font-semibold">{roadEvents.length}</div>
+                </div>
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Quakes (loaded)</div>
+                  <div className="text-2xl font-semibold">{quakes.length}</div>
+                </div>
+                <div className="rounded-xl border p-3">
+                  <div className="text-xs text-gray-500">Community Reports</div>
+                  <div className="text-2xl font-semibold">1</div>
+                </div>
+              </div>
+            </div>
+
+            {/* Subscriptions (demo) */}
+            <div className="bg-white rounded-2xl shadow-sm border p-4">
+              <div className="font-semibold mb-2">Subscriptions</div>
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" defaultChecked />
+                Alert me for MMI ≥ 4 within 50 km
+              </label>
+              <label className="flex items-center gap-2 text-sm mt-2">
+                <input type="checkbox" defaultChecked />
+                Alert me for new road closures in area
+              </label>
+            </div>
           </aside>
         </main>
       )}
 
-
-
-
-//NZTA
-      {/* Road Events (live from Waka Kotahi) */}
-<div className="bg-white rounded-2xl shadow-sm border p-4">
-  <div className="flex items-center justify-between mb-2">
-    <div className="font-semibold">Road Events (Waka Kotahi)</div>
-    <button
-      onClick={loadRoadEvents}
-      className="rounded-lg border px-3 py-1 text-sm"
-      disabled={loadingRoad}
-    >
-      {loadingRoad ? "Loading…" : "Refresh"}
-    </button>
-  </div>
-
-  {errorRoad && <div className="text-sm text-red-600">Error: {errorRoad}</div>}
-  {!loadingRoad && roadEvents.length === 0 && !errorRoad && (
-    <div className="text-sm text-gray-500">No data loaded yet — click Refresh.</div>
-  )}
-
-  <ul className="divide-y">
-    {roadEvents.slice(0, 20).map((ev) => {
-      const a = ev.attributes || {};
-      const when = a.LASTUPDATED
-        ? new Date(a.LASTUPDATED).toLocaleString()
-        : a.STARTDATE
-        ? new Date(a.STARTDATE).toLocaleString()
-        : "";
-      return (
-        <li key={a.OBJECTID} className="py-3">
-          <div className="text-sm font-medium">
-            {a.EVENTTYPE || "Event"} {a.ROUTE ? `• ${a.ROUTE}` : ""}{" "}
-            {a.LOCATION ? `• ${a.LOCATION}` : ""}
-          </div>
-          <div className="text-xs text-gray-500">
-            {a.STATUS || "Status unknown"} {a.SEVERITY ? `• ${a.SEVERITY}` : ""}{" "}
-            {when ? `• ${when}` : ""}
-          </div>
-          {a.DESCRIPTION && (
-            <div className="text-sm text-gray-600 mt-1 line-clamp-3">
-              {a.DESCRIPTION}
-            </div>
-          )}
-        </li>
-      );
-    })}
-  </ul>
-</div>
-
-
-//-----
-
-
-
-
-
-
-
-      
       <footer className="max-w-7xl mx-auto px-4 py-6 text-xs text-gray-500">
         © 2025 GovHack NZ demo • Data sources: GeoNet, NZTA/Waka Kotahi, NIWA, LINZ • For demonstration only
       </footer>
