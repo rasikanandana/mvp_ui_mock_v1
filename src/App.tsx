@@ -48,6 +48,72 @@ export default function App() {
     }
   }
 
+
+
+//-----NZTA
+
+  // --- NZTA / Waka Kotahi Road Events (ArcGIS FeatureService layer 0) ---
+type RoadEvent = {
+  attributes: {
+    OBJECTID: number;
+    EVENTNAME?: string;
+    EVENTTYPE?: string;     // e.g., Closure, Roadworks, Warning
+    STATUS?: string;        // e.g., Open, Planned, Closed
+    STARTDATE?: number;     // epoch ms
+    ENDDATE?: number;       // epoch ms
+    DIRECTION?: string;
+    SEVERITY?: string;
+    LOCATION?: string;      // locality text
+    ROUTE?: string;         // e.g., SH1
+    LASTUPDATED?: number;   // epoch ms
+    DESCRIPTION?: string;
+  };
+  geometry?: { x: number; y: number }; // WebMercator or WGS84 depending on service
+};
+
+const [roadEvents, setRoadEvents] = useState<RoadEvent[]>([]);
+const [loadingRoad, setLoadingRoad] = useState(false);
+const [errorRoad, setErrorRoad] = useState<string | null>(null);
+
+// TODO: replace with the actual FeatureServer layer 0 URL you copied
+const NZTA_LAYER0 = "PASTE_FEATURESERVER_LAYER0_URL_HERE";
+
+async function loadRoadEvents() {
+  if (!NZTA_LAYER0 || NZTA_LAYER0.includes("PASTE")) {
+    setErrorRoad("Set NZTA_LAYER0 to the FeatureServer layer 0 URL.");
+    return;
+  }
+  try {
+    setLoadingRoad(true);
+    setErrorRoad(null);
+
+    // Standard ArcGIS query: all open/active events, last updated first
+    const params = new URLSearchParams({
+      where: "1=1",
+      outFields: "*",
+      orderByFields: "LASTUPDATED DESC",
+      f: "json",
+      // Return WGS84 coords so we can map later
+      outSR: "4326",
+    });
+
+    const res = await fetch(`${NZTA_LAYER0}/query?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    setRoadEvents((data.features || []) as RoadEvent[]);
+  } catch (e: any) {
+    setErrorRoad(e.message || "Failed to load road events");
+  } finally {
+    setLoadingRoad(false);
+  }
+}
+
+//---------
+
+
+
+
+  
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Top bar */}
@@ -174,6 +240,67 @@ export default function App() {
         </main>
       )}
 
+
+
+
+//NZTA
+      {/* Road Events (live from Waka Kotahi) */}
+<div className="bg-white rounded-2xl shadow-sm border p-4">
+  <div className="flex items-center justify-between mb-2">
+    <div className="font-semibold">Road Events (Waka Kotahi)</div>
+    <button
+      onClick={loadRoadEvents}
+      className="rounded-lg border px-3 py-1 text-sm"
+      disabled={loadingRoad}
+    >
+      {loadingRoad ? "Loading…" : "Refresh"}
+    </button>
+  </div>
+
+  {errorRoad && <div className="text-sm text-red-600">Error: {errorRoad}</div>}
+  {!loadingRoad && roadEvents.length === 0 && !errorRoad && (
+    <div className="text-sm text-gray-500">No data loaded yet — click Refresh.</div>
+  )}
+
+  <ul className="divide-y">
+    {roadEvents.slice(0, 20).map((ev) => {
+      const a = ev.attributes || {};
+      const when = a.LASTUPDATED
+        ? new Date(a.LASTUPDATED).toLocaleString()
+        : a.STARTDATE
+        ? new Date(a.STARTDATE).toLocaleString()
+        : "";
+      return (
+        <li key={a.OBJECTID} className="py-3">
+          <div className="text-sm font-medium">
+            {a.EVENTTYPE || "Event"} {a.ROUTE ? `• ${a.ROUTE}` : ""}{" "}
+            {a.LOCATION ? `• ${a.LOCATION}` : ""}
+          </div>
+          <div className="text-xs text-gray-500">
+            {a.STATUS || "Status unknown"} {a.SEVERITY ? `• ${a.SEVERITY}` : ""}{" "}
+            {when ? `• ${when}` : ""}
+          </div>
+          {a.DESCRIPTION && (
+            <div className="text-sm text-gray-600 mt-1 line-clamp-3">
+              {a.DESCRIPTION}
+            </div>
+          )}
+        </li>
+      );
+    })}
+  </ul>
+</div>
+
+
+//-----
+
+
+
+
+
+
+
+      
       <footer className="max-w-7xl mx-auto px-4 py-6 text-xs text-gray-500">
         © 2025 GovHack NZ demo • Data sources: GeoNet, NZTA/Waka Kotahi, NIWA, LINZ • For demonstration only
       </footer>
