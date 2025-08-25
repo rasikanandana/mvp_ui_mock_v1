@@ -1,3 +1,4 @@
+// src/App.tsx
 import React, { useEffect, useRef, useState } from "react";
 
 /* =========================
@@ -26,7 +27,7 @@ type RoadEventFeature = {
   properties: Record<string, any>;
 };
 
-// Open-Meteo (very small slice)
+// Open-Meteo (tiny slice)
 type WeatherNow = {
   temperature: number;
   windspeed: number;
@@ -42,7 +43,7 @@ const NZTA_ROAD_EVENTS =
   "https://services.arcgis.com/CXBb7LAjgIIdcsPt/arcgis/rest/services/NZTA_Highway_Information/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson";
 
 // default map center (NZ)
-const DEFAULT_CENTER: [number, number] = [-41.2866, 174.7762]; // Wellington lat, lon-ish
+const DEFAULT_CENTER: [number, number] = [-41.2866, 174.7762]; // lat, lon
 
 /* =========================
    Helpers
@@ -92,12 +93,24 @@ function titleCase(s: string) {
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1) : ""))
     .join(" ");
 }
+// Haversine distance (km)
+function distanceKm(aLat: number, aLon: number, bLat: number, bLon: number): number {
+  const R = 6371;
+  const dLat = ((bLat - aLat) * Math.PI) / 180;
+  const dLon = ((bLon - aLon) * Math.PI) / 180;
+  const sLat1 = (aLat * Math.PI) / 180;
+  const sLat2 = (bLat * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(sLat1) * Math.cos(sLat2) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
 
-/* Use Leaflet from CDN */
+/* Leaflet from CDN */
 declare const L: any;
 
 /* =========================
-   Small Architecture stub
+   Tiny Architecture stub
    ========================= */
 function ArchitectureDiagram() {
   return (
@@ -119,7 +132,7 @@ function ArchitectureDiagram() {
 export default function App() {
   /* --------- UI state --------- */
   const [view, setView] = useState<"dashboard" | "architecture">("dashboard");
-  const [radius, setRadius] = useState(10);
+  const [radius, setRadius] = useState(10); // km filter radius
   const [layers, setLayers] = useState({
     quakes: true,
     traffic: true,
@@ -135,6 +148,7 @@ export default function App() {
   const mapRef = useRef<any>(null);
   const quakesLayerRef = useRef<any>(null);
   const roadsLayerRef = useRef<any>(null);
+  const radiusLayerRef = useRef<any>(null);
   const [mapCenter, setMapCenter] = useState<[number, number]>(DEFAULT_CENTER);
 
   useEffect(() => {
@@ -142,12 +156,13 @@ export default function App() {
     const map = L.map(mapDivRef.current).setView(DEFAULT_CENTER, 6);
     L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
       attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
       maxZoom: 19,
     }).addTo(map);
 
     const quakesLayer = L.layerGroup().addTo(map);
     const roadsLayer = L.layerGroup().addTo(map);
+    const radiusLayer = L.layerGroup().addTo(map);
 
     map.on("moveend", () => {
       const c = map.getCenter();
@@ -157,7 +172,47 @@ export default function App() {
     mapRef.current = map;
     quakesLayerRef.current = quakesLayer;
     roadsLayerRef.current = roadsLayer;
+    radiusLayerRef.current = radiusLayer;
   }, []);
+
+  // draw/update radius circle whenever center or radius changes
+  useEffect(() => {
+    if (!radiusLayerRef.current || !mapRef.current) return;
+    const layer = radiusLayerRef.current;
+    layer.clearLayers();
+    const [lat, lon] = mapCenter;
+    const circle = L.circle([lat, lon], {
+      radius: radius * 1000, // meters
+      color: "#666",
+      weight: 1,
+      fillColor: "#999",
+      fillOpacity: 0.08,
+    });
+    circle.addTo(layer);
+  }, [mapCenter, radius]);
+
+  // Use my location (HTML5 geolocation)
+  function useMyLocation() {
+    if (!navigator.geolocation) {
+      alert("Geolocation is not supported by your browser.");
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setMapCenter([lat, lon]);
+        if (mapRef.current) {
+          mapRef.current.setView([lat, lon], 12);
+        }
+      },
+      (err) => {
+        console.error("Geolocation error", err);
+        alert("Could not get your location. Check browser permissions (HTTPS required).");
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }
 
   /* --------- GeoNet quakes --------- */
   const [quakes, setQuakes] = useState<QuakeFeature[]>([]);
@@ -185,37 +240,42 @@ export default function App() {
     }
   }
 
-  // draw quakes on the map whenever quakes or magMin change
+  // Filter quakes by radius + magnitude
+  const quakesFiltered = quakes.filter((q) => {
+    const [lon, lat] = q.geometry.coordinates;
+    const d = distanceKm(mapCenter[0], mapCenter[1], lat, lon);
+    return d <= radius && (q.properties?.magnitude ?? 0) >= magMin;
+  });
+
+  // draw quakes on the map when filtered set changes
   useEffect(() => {
     if (!quakesLayerRef.current || !mapRef.current) return;
     const layer = quakesLayerRef.current;
     layer.clearLayers();
-    quakes
-      .filter((q) => (q.properties?.magnitude ?? 0) >= magMin)
-      .forEach((q) => {
-        const [lon, lat] = q.geometry.coordinates;
-        const mag = q.properties.magnitude ?? 0;
-        const color =
-          mag >= 5 ? "#d73027" : mag >= 4 ? "#fc8d59" : mag >= 3 ? "#fee08b" : "#d9ef8b";
-        const radius = Math.max(4, mag * 2.2);
-        L.circleMarker([lat, lon], {
-          radius,
-          color,
-          weight: 1,
-          fillColor: color,
-          fillOpacity: 0.7,
-        })
-          .bindPopup(
-            `<b>M${mag.toFixed(1)}</b> • ${q.properties.locality}<br/>` +
-              `${new Date(q.properties.time).toLocaleString()} • depth ${q.properties.depth} km<br/>` +
-              `MMI ${q.properties.mmi} • ${q.properties.quality}<br/>` +
-              `<a href="https://www.geonet.org.nz/earthquake/${q.properties.publicID}" target="_blank">View on GeoNet</a>`
-          )
-          .addTo(layer);
-      });
-  }, [quakes, magMin]);
+    quakesFiltered.forEach((q) => {
+      const [lon, lat] = q.geometry.coordinates;
+      const mag = q.properties.magnitude ?? 0;
+      const color =
+        mag >= 5 ? "#d73027" : mag >= 4 ? "#fc8d59" : mag >= 3 ? "#fee08b" : "#d9ef8b";
+      const r = Math.max(4, mag * 2.2);
+      L.circleMarker([lat, lon], {
+        radius: r,
+        color,
+        weight: 1,
+        fillColor: color,
+        fillOpacity: 0.7,
+      })
+        .bindPopup(
+          `<b>M${mag.toFixed(1)}</b> • ${q.properties.locality}<br/>` +
+            `${new Date(q.properties.time).toLocaleString()} • depth ${q.properties.depth} km<br/>` +
+            `MMI ${q.properties.mmi} • ${q.properties.quality}<br/>` +
+            `<a href="https://www.geonet.org.nz/earthquake/${q.properties.publicID}" target="_blank">View on GeoNet</a>`
+        )
+        .addTo(layer);
+    });
+  }, [quakesFiltered]);
 
-  /* --------- NZTA road events (robust field mapping) --------- */
+  /* --------- NZTA road events --------- */
   const [roadEvents, setRoadEvents] = useState<RoadEventFeature[]>([]);
   const [loadingRoad, setLoadingRoad] = useState(false);
   const [errorRoad, setErrorRoad] = useState<string | null>(null);
@@ -236,12 +296,21 @@ export default function App() {
     }
   }
 
-  // draw road events on the map whenever they change
+  // Filter road events by radius
+  const roadsFiltered = roadEvents.filter((ev) => {
+    const c = ev.geometry?.coordinates;
+    if (!c) return false;
+    const [lon, lat] = c;
+    const d = distanceKm(mapCenter[0], mapCenter[1], lat, lon);
+    return d <= radius;
+  });
+
+  // draw roads on the map when filtered set changes
   useEffect(() => {
     if (!roadsLayerRef.current || !mapRef.current) return;
     const layer = roadsLayerRef.current;
     layer.clearLayers();
-    roadEvents.forEach((ev) => {
+    roadsFiltered.forEach((ev) => {
       const coords = ev.geometry?.coordinates;
       if (!coords) return;
       const [lon, lat] = coords;
@@ -262,20 +331,20 @@ export default function App() {
         pickPropIncludes(p, ["loc"]) ??
         "";
 
-      const marker = L.circleMarker([lat, lon], {
+      const m = L.circleMarker([lat, lon], {
         radius: 6,
         color: "#2b83ba",
         weight: 1,
         fillColor: "#2b83ba",
         fillOpacity: 0.8,
       }).addTo(layer);
-      marker.bindPopup(
+      m.bindPopup(
         `<b>${titleCase(String(eventType))}</b>${route ? ` • ${route}` : ""}${location ? ` • ${location}` : ""}<br/>` +
           `${status ? titleCase(String(status)) + " • " : ""}` +
           `<small>(Data: Waka Kotahi NZTA)</small>`
       );
     });
-  }, [roadEvents]);
+  }, [roadsFiltered]);
 
   /* --------- Open-Meteo (weather at map center) --------- */
   const [weather, setWeather] = useState<WeatherNow | null>(null);
@@ -333,7 +402,7 @@ export default function App() {
           </nav>
           <div className="ml-auto flex items-center gap-2 w-full sm:w-[520px]">
             <input className="w-full rounded-xl border px-3 py-2 text-sm" placeholder="Search address e.g. 123 Queen St" />
-            <button className="rounded-xl bg-black text-white px-4 py-2 text-sm">Locate</button>
+            <button onClick={useMyLocation} className="rounded-xl border px-3 py-2 text-sm">Use my location</button>
           </div>
         </div>
       </header>
@@ -351,8 +420,14 @@ export default function App() {
                 <div className="font-semibold">Map</div>
                 <div className="flex items-center gap-2">
                   <label className="text-sm text-gray-600">Radius</label>
-                  <input type="range" min={1} max={50} value={radius} onChange={(e) => setRadius(parseInt(e.target.value))} />
-                  <span className="text-sm w-10 text-right">{radius} km</span>
+                  <input
+                    type="range"
+                    min={1}
+                    max={200}
+                    value={radius}
+                    onChange={(e) => setRadius(parseInt(e.target.value))}
+                  />
+                  <span className="text-sm w-14 text-right">{radius} km</span>
                   <button className="rounded-lg border px-3 py-1 text-sm">Draw Area</button>
                 </div>
               </div>
@@ -361,7 +436,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Layer toggles */}
+            {/* Layer toggles (visual only for now) */}
             <div className="bg-white rounded-2xl shadow-sm border p-4">
               <div className="font-semibold mb-2">Layers</div>
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -447,10 +522,10 @@ export default function App() {
               )}
             </div>
 
-            {/* Earthquakes (live from GeoNet) */}
+            {/* Earthquakes (GeoNet) */}
             <div className="bg-white rounded-2xl shadow-sm border p-4">
               <div className="flex items-center justify-between mb-2">
-                <div className="font-semibold">Earthquakes (GeoNet, MMI ≥ 3)</div>
+                <div className="font-semibold">Earthquakes (GeoNet, within radius)</div>
                 <div className="flex items-center gap-2">
                   <label className="text-xs text-gray-500">Min mag</label>
                   <input
@@ -467,50 +542,48 @@ export default function App() {
                 </div>
               </div>
               {errorQuakes && <div className="text-sm text-red-600">Error: {errorQuakes}</div>}
-              {!loadingQuakes && quakes.length === 0 && !errorQuakes && (
-                <div className="text-sm text-gray-500">No data loaded yet — click Refresh.</div>
+              {!loadingQuakes && quakesFiltered.length === 0 && !errorQuakes && (
+                <div className="text-sm text-gray-500">No results within {radius} km — try Refresh or widen the radius.</div>
               )}
               <ul className="divide-y">
-                {quakes
-                  .filter((q) => (q.properties?.magnitude ?? 0) >= magMin)
-                  .map((q) => (
-                    <li key={q.properties.publicID} className="py-3">
-                      <div className="text-sm font-medium">
-                        M{q.properties.magnitude.toFixed(1)} • {q.properties.locality}
-                      </div>
-                      <div className="text-xs text-gray-500">
-                        {new Date(q.properties.time).toLocaleString()} • depth {q.properties.depth} km • MMI {q.properties.mmi} •{" "}
-                        {q.properties.quality}
-                      </div>
-                      <div className="text-xs mt-1">
-                        <a
-                          className="underline text-blue-700"
-                          href={`https://www.geonet.org.nz/earthquake/${q.properties.publicID}`}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View on GeoNet
-                        </a>
-                      </div>
-                    </li>
-                  ))}
+                {quakesFiltered.map((q) => (
+                  <li key={q.properties.publicID} className="py-3">
+                    <div className="text-sm font-medium">
+                      M{q.properties.magnitude.toFixed(1)} • {q.properties.locality}
+                    </div>
+                    <div className="text-xs text-gray-500">
+                      {new Date(q.properties.time).toLocaleString()} • depth {q.properties.depth} km • MMI {q.properties.mmi} •{" "}
+                      {q.properties.quality}
+                    </div>
+                    <div className="text-xs mt-1">
+                      <a
+                        className="underline text-blue-700"
+                        href={`https://www.geonet.org.nz/earthquake/${q.properties.publicID}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        View on GeoNet
+                      </a>
+                    </div>
+                  </li>
+                ))}
               </ul>
             </div>
 
-            {/* Road Events (live from Waka Kotahi) */}
+            {/* Road Events (NZTA) */}
             <div className="bg-white rounded-2xl shadow-sm border p-4">
               <div className="flex items-center justify-between mb-2">
-                <div className="font-semibold">Road Events (NZTA)</div>
+                <div className="font-semibold">Road Events (within radius)</div>
                 <button onClick={loadRoadEvents} className="rounded-lg border px-3 py-1 text-sm" disabled={loadingRoad}>
                   {loadingRoad ? "Loading…" : "Refresh"}
                 </button>
               </div>
               {errorRoad && <div className="text-sm text-red-600">Error: {errorRoad}</div>}
-              {!loadingRoad && roadEvents.length === 0 && !errorRoad && (
-                <div className="text-sm text-gray-500">No data loaded yet — click Refresh.</div>
+              {!loadingRoad && roadsFiltered.length === 0 && !errorRoad && (
+                <div className="text-sm text-gray-500">No results within {radius} km — try Refresh or widen the radius.</div>
               )}
               <ul className="divide-y">
-                {roadEvents
+                {roadsFiltered
                   .map((ev) => {
                     const p = ev.properties || {};
                     const eventType =
@@ -538,10 +611,10 @@ export default function App() {
                     const hasMeaningful =
                       cleanNA(eventType) || cleanNA(status) || cleanNA(severity) || cleanNA(desc);
 
-                    return { id, eventType, status, severity, route, location, desc, when, hasMeaningful, geom: ev.geometry };
+                    return { id, eventType, status, severity, route, location, desc, when, hasMeaningful };
                   })
                   .filter((x) => x.hasMeaningful)
-                  .slice(0, 20)
+                  .slice(0, 24)
                   .map(({ id, eventType, status, severity, route, location, desc, when }) => (
                     <li key={String(id)} className="py-3">
                       <div className="text-sm font-medium">
@@ -559,19 +632,17 @@ export default function App() {
               </ul>
             </div>
 
-            {/* Area summary (demo) */}
+            {/* Area summary */}
             <div className="bg-white rounded-2xl shadow-sm border p-4">
               <div className="font-semibold mb-2">Area Summary</div>
               <div className="grid grid-cols-2 gap-3 text-sm">
                 <div className="rounded-xl border p-3">
                   <div className="text-xs text-gray-500">Quakes shown (≥ mag)</div>
-                  <div className="text-2xl font-semibold">
-                    {quakes.filter((q) => (q.properties?.magnitude ?? 0) >= magMin).length}
-                  </div>
+                  <div className="text-2xl font-semibold">{quakesFiltered.length}</div>
                 </div>
                 <div className="rounded-xl border p-3">
-                  <div className="text-xs text-gray-500">Road events loaded</div>
-                  <div className="text-2xl font-semibold">{roadEvents.length}</div>
+                  <div className="text-xs text-gray-500">Road events shown</div>
+                  <div className="text-2xl font-semibold">{roadsFiltered.length}</div>
                 </div>
                 <div className="rounded-xl border p-3">
                   <div className="text-xs text-gray-500">Map center</div>
