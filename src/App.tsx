@@ -23,16 +23,7 @@ type QuakeFC = { type: "FeatureCollection"; features: QuakeFeature[] };
 // NZTA / Waka Kotahi Road Events (GeoJSON Feature)
 type RoadEventFeature = {
   type: "Feature";
-  properties: {
-    OBJECTID: number;
-    EVENTTYPE?: string;
-    STATUS?: string;
-    SEVERITY?: string;
-    ROUTE?: string;
-    LOCATION?: string;
-    DESCRIPTION?: string;
-    LASTUPDATED?: number;
-  };
+  properties: Record<string, any>; // fields vary per service revision
 };
 
 /* =========================
@@ -41,6 +32,53 @@ type RoadEventFeature = {
 const GEONET_RECENT = "https://api.geonet.org.nz/quake?MMI=3";
 const NZTA_ROAD_EVENTS =
   "https://services.arcgis.com/CXBb7LAjgIIdcsPt/arcgis/rest/services/NZTA_Highway_Information/FeatureServer/0/query?outFields=*&where=1%3D1&f=geojson";
+
+/* =========================
+   Helpers (field picking)
+   ========================= */
+function pickProp(
+  obj: Record<string, any>,
+  candidates: string[]
+): any | undefined {
+  // try exact first
+  for (const k of candidates) if (obj[k] != null) return obj[k];
+  // then case-insensitive
+  const map: Record<string, string> = {};
+  Object.keys(obj).forEach((k) => (map[k.toLowerCase()] = k));
+  for (const k of candidates) {
+    const found = map[k.toLowerCase()];
+    if (found && obj[found] != null) return obj[found];
+  }
+  return undefined;
+}
+
+function pickPropIncludes(
+  obj: Record<string, any>,
+  substrs: string[]
+): any | undefined {
+  const entries = Object.entries(obj);
+  const lower = substrs.map((s) => s.toLowerCase());
+  for (const [k, v] of entries) {
+    const lk = k.toLowerCase();
+    if (lower.every((s) => lk.includes(s))) return v;
+  }
+  return undefined;
+}
+
+function toLocalDate(val: any): string {
+  if (val == null) return "";
+  const n = Number(val);
+  if (!Number.isNaN(n)) {
+    const ms = n < 1e12 ? n * 1000 : n; // handle seconds or ms
+    const d = new Date(ms);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString();
+  }
+  if (typeof val === "string") {
+    const d = new Date(val);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString();
+  }
+  return String(val);
+}
 
 /* =========================
    Components
@@ -103,7 +141,7 @@ export default function App() {
     }
   }
 
-  /* --------- NZTA road events --------- */
+  /* --------- NZTA road events (robust field mapping) --------- */
   const [roadEvents, setRoadEvents] = useState<RoadEventFeature[]>([]);
   const [loadingRoad, setLoadingRoad] = useState(false);
   const [errorRoad, setErrorRoad] = useState<string | null>(null);
@@ -115,7 +153,13 @@ export default function App() {
       const res = await fetch(NZTA_ROAD_EVENTS);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setRoadEvents((data.features || []) as RoadEventFeature[]);
+      const feats = (data.features || []) as RoadEventFeature[];
+      setRoadEvents(feats);
+      // Helpful: peek at field names in devtools
+      if (feats[0]) {
+        // eslint-disable-next-line no-console
+        console.log("NZTA sample fields:", Object.keys(feats[0].properties));
+      }
     } catch (e: any) {
       setErrorRoad(e.message || "Failed to load road events");
     } finally {
@@ -365,24 +409,48 @@ export default function App() {
               <ul className="divide-y">
                 {roadEvents.slice(0, 20).map((ev) => {
                   const p = ev.properties || {};
-                  const when = p.LASTUPDATED
-                    ? new Date(p.LASTUPDATED).toLocaleString()
-                    : "";
+                  // robust field mapping
+                  const eventType =
+                    pickProp(p, ["EVENTTYPE", "EventType", "eventType", "event_type"]) ??
+                    pickPropIncludes(p, ["event", "type"]) ??
+                    "Event";
+                  const status =
+                    pickProp(p, ["STATUS", "Status", "status"]) ??
+                    pickPropIncludes(p, ["status"]) ??
+                    "Status unknown";
+                  const severity =
+                    pickProp(p, ["SEVERITY", "Severity", "severity"]) ??
+                    pickPropIncludes(p, ["severity"]);
+                  const route =
+                    pickProp(p, ["ROUTE", "Route", "route", "road", "roadname"]) ??
+                    pickPropIncludes(p, ["route"]);
+                  const location =
+                    pickProp(p, ["LOCATION", "Location", "location", "locality"]) ??
+                    pickPropIncludes(p, ["loc"]);
+                  const desc =
+                    pickProp(p, ["DESCRIPTION", "Description", "description", "DETAILS"]) ??
+                    pickPropIncludes(p, ["desc"]);
+                  const lastUpdated =
+                    pickProp(p, ["LASTUPDATED", "LastUpdated", "lastupdated", "last_edited_date"]) ??
+                    pickPropIncludes(p, ["last", "update"]);
+
+                  const when = toLocalDate(lastUpdated);
+                  const id =
+                    pickProp(p, ["OBJECTID", "ObjectID", "objectid", "id"]) ??
+                    Math.random();
+
                   return (
-                    <li key={p.OBJECTID} className="py-3">
+                    <li key={String(id)} className="py-3">
                       <div className="text-sm font-medium">
-                        {p.EVENTTYPE || "Event"} {p.ROUTE ? `• ${p.ROUTE}` : ""}{" "}
-                        {p.LOCATION ? `• ${p.LOCATION}` : ""}
+                        {String(eventType)} {route ? `• ${route}` : ""}{" "}
+                        {location ? `• ${location}` : ""}
                       </div>
                       <div className="text-xs text-gray-500">
-                        {p.STATUS || "Status unknown"}{" "}
-                        {p.SEVERITY ? `• ${p.SEVERITY}` : ""}{" "}
+                        {String(status)} {severity ? `• ${severity}` : ""}{" "}
                         {when ? `• ${when}` : ""}
                       </div>
-                      {p.DESCRIPTION && (
-                        <div className="text-sm text-gray-600 mt-1">
-                          {p.DESCRIPTION}
-                        </div>
+                      {desc && (
+                        <div className="text-sm text-gray-600 mt-1">{String(desc)}</div>
                       )}
                     </li>
                   );
@@ -430,7 +498,7 @@ export default function App() {
       )}
 
       <footer className="max-w-7xl mx-auto px-4 py-6 text-xs text-gray-500">
-        © 2025 GovHack NZ demo • Data sources: GeoNet, NZTA/Waka Kotahi, NIWA, LINZ • For demonstration only
+        © 2025 demo 
       </footer>
     </div>
   );
