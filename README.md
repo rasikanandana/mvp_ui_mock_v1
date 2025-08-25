@@ -1,5 +1,5 @@
 test
-# MVP UI Mock V1 — GitHub Pages Ready.
+# MVP UI Mock V1 — GitHub Pages Ready..
 
 This repo is configured for GitHub Pages and Vite. Use it as a clean base if your current repo shows a blank page.
 
