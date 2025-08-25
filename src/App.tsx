@@ -249,6 +249,57 @@ export default function App() {
               </ul>
             </div>
 
+{/* Earthquakes (live from GeoNet) */}
+<div className="bg-white rounded-2xl shadow-sm border p-4">
+  <div className="flex items-center justify-between mb-2">
+    <div className="font-semibold">Earthquakes (GeoNet, MMI ≥ 3)</div>
+    <button
+      onClick={loadQuakes}
+      className="rounded-lg border px-3 py-1 text-sm"
+      disabled={loadingQuakes}
+    >
+      {loadingQuakes ? "Loading…" : "Refresh"}
+    </button>
+  </div>
+
+  {errorQuakes && (
+    <div className="text-sm text-red-600">Error: {errorQuakes}</div>
+  )}
+
+  {!loadingQuakes && quakes.length === 0 && !errorQuakes && (
+    <div className="text-sm text-gray-500">
+      No data loaded yet — click Refresh.
+    </div>
+  )}
+
+  <ul className="divide-y">
+    {quakes.map((q) => (
+      <li key={q.properties.publicID} className="py-3">
+        <div className="text-sm font-medium">
+          M{q.properties.magnitude.toFixed(1)} • {q.properties.locality}
+        </div>
+        <div className="text-xs text-gray-500">
+          {new Date(q.properties.time).toLocaleString()} • depth {q.properties.depth} km • MMI {q.properties.mmi} • {q.properties.quality}
+        </div>
+        <div className="text-xs mt-1">
+          <a
+            className="underline text-blue-700"
+            href={`https://www.geonet.org.nz/earthquake/${q.properties.publicID}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            View on GeoNet
+          </a>
+        </div>
+      </li>
+    ))}
+  </ul>
+</div>
+
+
+
+            
+
             <div className="bg-white rounded-2xl shadow-sm border p-4">
               <div className="font-semibold mb-2">Area Summary</div>
               <div className="grid grid-cols-2 gap-3 text-sm">
