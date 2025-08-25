@@ -1,5 +1,49 @@
 import React, { useState } from "react";
 
+// 1) Types
+type QuakeFeature = {
+  type: "Feature";
+  geometry: { type: "Point"; coordinates: [number, number] };
+  properties: {
+    publicID: string;
+    time: string;
+    depth: number;
+    magnitude: number;
+    locality: string;
+    mmi: number;
+    quality: string;
+  };
+};
+type QuakeFC = { type: "FeatureCollection"; features: QuakeFeature[] };
+
+// 2) State + loader
+const [quakes, setQuakes] = useState<QuakeFeature[]>([]);
+const [loadingQuakes, setLoadingQuakes] = useState(false);
+const [errorQuakes, setErrorQuakes] = useState<string | null>(null);
+
+async function loadQuakes() {
+  try {
+    setLoadingQuakes(true);
+    setErrorQuakes(null);
+    const res = await fetch("https://api.geonet.org.nz/quake?MMI=3", {
+      headers: { Accept: "application/vnd.geo+json;version=2" },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data: QuakeFC = await res.json();
+    // sort newest first
+    const sorted = [...data.features].sort(
+      (a, b) => new Date(b.properties.time).getTime() - new Date(a.properties.time).getTime()
+    );
+    setQuakes(sorted.slice(0, 20)); // cap to 20 for UI
+  } catch (e: any) {
+    setErrorQuakes(e.message || "Failed to load quakes");
+  } finally {
+    setLoadingQuakes(false);
+  }
+}
+
+
+
 function ArchitectureDiagram() {
   return (
     <div className="max-w-7xl mx-auto p-4">
