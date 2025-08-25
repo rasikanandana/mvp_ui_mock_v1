@@ -176,7 +176,7 @@ export default function App() {
             Community Hazard Dashboard
           </div>
           <span className="text-xs text-gray-500 hidden sm:block">
-            GovHack NZ • MVP
+            MVP
           </span>
           <nav className="ml-4 flex items-center gap-2">
             <button
