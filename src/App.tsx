@@ -1,4 +1,4 @@
-// src/App.tsx — NHC Community Hazard Dashboard (improved)
+// src/App.tsx — Community Hazard Dashboard (improved)
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /* =========================
