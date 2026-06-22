@@ -185,7 +185,7 @@ function ArchitectureDiagram() {
     <main className="max-w-5xl mx-auto p-6">
       <h2 className="text-2xl font-bold mb-1 text-slate-800">System Architecture</h2>
       <p className="text-sm text-slate-500 mb-5">
-        End-to-end data pipeline — authoritative NZ sources → React UI.
+        data pipeline.
       </p>
       <div className="bg-white rounded-2xl border p-4 overflow-x-auto shadow-sm">
         <svg
@@ -246,7 +246,7 @@ function ArchitectureDiagram() {
         </svg>
       </div>
       <p className="text-xs text-slate-400 mt-3">
-        All sources are open/free-access. Calls are made directly from the browser (CORS-compliant).
+        ..
       </p>
     </main>
   );
@@ -258,7 +258,7 @@ function ArchitectureDiagram() {
 export default function App() {
   /* --------- UI state --------- */
   const [view, setView] = useState<"dashboard" | "architecture">("dashboard");
-  const [radius, setRadius] = useState(100);
+  const [radius, setRadius] = useState(300);
   const [layers, setLayers] = useState({
     quakes: true, traffic: true, rain: true, flood: false, landslide: false, community: true,
   });
@@ -575,34 +575,38 @@ export default function App() {
     [quakesFiltered, activeVolcanoes]
   );
 
-  /* Live Feed: 2 most-recent EQ + 2 road events + highest-alert volcano */
-  const recentFeedEvents = useMemo(() => {
+  /* Live Feed: 2 most-recent EQ + 2 road events (with full detail) + highest-alert volcano (NZ-wide) */
+  const feedData = useMemo(() => {
     const eqItems = quakesFiltered.slice(0, 2).map((q) => ({
       tag: "EQ", tagBg: "bg-red-100", tagColor: "text-red-700",
       title:  `Quake M${q.properties.magnitude.toFixed(1)} — ${q.properties.locality}`,
       time:   new Date(q.properties.time).toLocaleString(),
       detail: `Depth ${q.properties.depth} km · MMI ${q.properties.mmi} · ${q.properties.quality}`,
+      desc:   "",
     }));
 
     const roadItems = roadsFiltered.slice(0, 2).map((ev) => {
-      const p = ev.properties || {};
-      const t =
-        pickProp(p, ["EVENTTYPE", "EventType", "eventType"]) ??
-        pickPropIncludes(p, ["event", "type"]) ?? "Road Event";
-      const route = pickProp(p, ["ROUTE", "Route", "route"]) ?? pickPropIncludes(p, ["route"]) ?? "";
-      const when  = toLocalDate(
-        pickProp(p, ["LASTUPDATED", "LastUpdated", "last_edited_date"]) ??
-        pickPropIncludes(p, ["last", "update"])
-      );
+      const p        = ev.properties || {};
+      const t        = pickProp(p, ["EVENTTYPE", "EventType", "eventType"]) ?? pickPropIncludes(p, ["event", "type"]) ?? "Road Event";
+      const route    = pickProp(p, ["ROUTE", "Route", "route", "road", "roadname"])   ?? pickPropIncludes(p, ["route"])        ?? "";
+      const location = pickProp(p, ["LOCATION", "Location", "location", "locality"]) ?? pickPropIncludes(p, ["loc"])           ?? "";
+      const status   = cleanNA(pickProp(p, ["STATUS", "Status", "status"])            ?? pickPropIncludes(p, ["status"])        ?? "");
+      const desc     = cleanNA(pickProp(p, ["DESCRIPTION", "Description", "description", "DETAILS"]) ?? pickPropIncludes(p, ["desc"]) ?? "");
+      const when     = toLocalDate(pickProp(p, ["LASTUPDATED", "LastUpdated", "last_edited_date"]) ?? pickPropIncludes(p, ["last", "update"]));
+      const detailParts = [
+        status   ? titleCase(status)   : "",
+        cleanNA(location) ? String(location) : "",
+      ].filter(Boolean);
       return {
         tag: "ROAD", tagBg: "bg-blue-100", tagColor: "text-blue-700",
         title:  `${titleCase(String(t))}${route ? " · " + route : ""}`,
         time:   when || "Recent",
-        detail: "Waka Kotahi NZTA",
+        detail: detailParts.join(" · ") || "Waka Kotahi NZTA",
+        desc,
       };
     });
 
-    // Highest-alert volcano (sort descending by level, take first)
+    // Highest-alert volcano — NZ-wide, not filtered by radius
     const topVol = [...volcanoes].sort((a, b) => b.properties.level - a.properties.level)[0];
     const volItems = topVol
       ? [{
@@ -612,16 +616,11 @@ export default function App() {
           title:  `${topVol.properties.volcanoTitle} — Level ${topVol.properties.level}`,
           time:   "Current",
           detail: topVol.properties.activity,
+          desc:   "",
         }]
       : [];
 
-    const all = [...eqItems, ...roadItems, ...volItems];
-    if (all.length === 0)
-      return [{
-        tag: "–", tagBg: "bg-slate-100", tagColor: "text-slate-400",
-        title: "No events in radius — adjust radius or click Refresh All", time: "", detail: "",
-      }];
-    return all;
+    return { radiusItems: [...eqItems, ...roadItems], volItems };
   }, [quakesFiltered, roadsFiltered, volcanoes]);
 
   /* Refresh All */
@@ -641,12 +640,15 @@ export default function App() {
       <header className="sticky top-0 z-[900] bg-white/95 backdrop-blur border-b shadow-sm">
         <div className="max-w-7xl mx-auto px-4 py-2.5 flex items-center gap-3 flex-wrap">
 
-          <div className="flex items-center gap-2 shrink-0">
-            <span className="text-lg font-bold tracking-tight text-slate-800">
-              Community Hazard Dashboard
-            </span>
+          <div className="flex items-start gap-2 shrink-0">
+            <div>
+              <span className="text-lg font-bold tracking-tight text-slate-800">
+                Community Hazard Dashboard
+              </span>
+              <div className="text-xs text-slate-400 leading-tight mt-0.5">2025 ver 2. Rasika Nandana.</div>
+            </div>
             {alertCount > 0 && (
-              <span className="rounded-full bg-red-500 text-white text-xs font-bold px-2 py-0.5 animate-pulse">
+              <span className="rounded-full bg-red-500 text-white text-xs font-bold px-2 py-0.5 animate-pulse mt-1">
                 {alertCount}
               </span>
             )}
@@ -804,26 +806,58 @@ export default function App() {
               </div>
             </div>
 
-            {/* Live Feed: 2 EQ + 2 road + highest volcano */}
+            {/* Live Feed: 2 EQ + 2 road (with detail) + NZ volcanic alert */}
             <div className="bg-white rounded-2xl shadow-sm border p-4">
-              <div className="font-semibold text-sm mb-2">
-                Live Feed{" "}
-                <span className="text-xs font-normal text-slate-400">(within radius)</span>
+              <div className="font-semibold text-sm mb-2">Live Feed</div>
+
+              {/* Within-radius events */}
+              <div className="text-xs text-slate-400 font-semibold uppercase tracking-wide mb-1">
+                Within {radius} km
               </div>
-              <ul className="divide-y">
-                {recentFeedEvents.map((ev, i) => (
-                  <li key={i} className="py-2.5 flex items-start gap-2">
-                    <span className={`rounded px-1.5 py-0.5 text-xs font-bold shrink-0 ${ev.tagBg} ${ev.tagColor}`}>
-                      {ev.tag}
-                    </span>
-                    <div>
-                      <div className="text-sm font-medium text-slate-800">{ev.title}</div>
-                      {ev.time   && <div className="text-xs text-slate-400">{ev.time}</div>}
-                      {ev.detail && <div className="text-xs text-slate-500 mt-0.5">{ev.detail}</div>}
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {feedData.radiusItems.length === 0 ? (
+                <p className="text-xs text-slate-400 mb-3">
+                  No events — adjust radius or click Refresh All.
+                </p>
+              ) : (
+                <ul className="divide-y mb-3">
+                  {feedData.radiusItems.map((ev, i) => (
+                    <li key={i} className="py-2.5 flex items-start gap-2">
+                      <span className={`rounded px-1.5 py-0.5 text-xs font-bold shrink-0 ${ev.tagBg} ${ev.tagColor}`}>
+                        {ev.tag}
+                      </span>
+                      <div>
+                        <div className="text-sm font-medium text-slate-800">{ev.title}</div>
+                        {ev.time   && <div className="text-xs text-slate-400">{ev.time}</div>}
+                        {ev.detail && <div className="text-xs text-slate-500 mt-0.5">{ev.detail}</div>}
+                        {ev.desc   && <div className="text-xs text-slate-600 mt-0.5 italic">{ev.desc}</div>}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* NZ Volcanic Alerts — nationwide, not filtered by radius */}
+              {feedData.volItems.length > 0 && (
+                <>
+                  <div className="text-xs text-slate-400 font-semibold uppercase tracking-wide pt-2 pb-1 border-t">
+                    NZ Volcanic Alerts
+                  </div>
+                  <ul className="divide-y">
+                    {feedData.volItems.map((ev, i) => (
+                      <li key={i} className="py-2.5 flex items-start gap-2">
+                        <span className={`rounded px-1.5 py-0.5 text-xs font-bold shrink-0 ${ev.tagBg} ${ev.tagColor}`}>
+                          {ev.tag}
+                        </span>
+                        <div>
+                          <div className="text-sm font-medium text-slate-800">{ev.title}</div>
+                          {ev.time   && <div className="text-xs text-slate-400">{ev.time}</div>}
+                          {ev.detail && <div className="text-xs text-slate-500 mt-0.5">{ev.detail}</div>}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
             </div>
 
             {/* Weather */}
@@ -1029,7 +1063,7 @@ export default function App() {
         <a className="underline" href="https://www.nzta.govt.nz"     target="_blank">Waka Kotahi NZTA</a>{" "}·{" "}
         <a className="underline" href="https://www.openstreetmap.org" target="_blank">OpenStreetMap / Nominatim</a>{" "}·{" "}
         <a className="underline" href="https://open-meteo.com"        target="_blank">Open-Meteo</a>.{" "}
-        For demonstration purposes only — not for operational emergency use.
+        For demonstration purposes only — not for operational emergency use. Rasika Nandana 2025.
       </footer>
     </div>
   );
